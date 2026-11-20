@@ -1,0 +1,29 @@
+# Secrets, tokens et variables d'environnement
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+
+# Environnement Python / uv
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# Données locales, volumes et logs
+data/
+logs/
+*.log
+*.sql.gz
+*.dump
+
+# Éditeurs et fichiers système
+*~
+\#*\#
+.\#*
+.DS_Store

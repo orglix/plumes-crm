@@ -1,0 +1,30 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: plumes-crm-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: plumes_crm
+      POSTGRES_USER: plumes_user
+      POSTGRES_PASSWORD: plumes_secret_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+  plumes-crm:
+    build: .
+    container_name: plumes-crm
+    restart: "no"   # à passer en unless-stopped quand le service tournera en continu
+    env_file: .env
+    environment:
+      - DATABASE_URL=postgresql://plumes_user:plumes_secret_password@postgres:5432/plumes_crm
+    volumes:
+      - ./secrets:/app/secrets
+      - ./data:/app/data
+      - ./logs:/app/logs
+    depends_on:
+      - postgres
+
+
+volumes:
+  pgdata:
