@@ -19,7 +19,9 @@ print(auth_url)
 print("\n2) Elle choisit son compte Gmail, clique sur « Paramètres avancés » puis")
 print("   « Accéder à ... (non sécurisé) », puis autorise l'accès.")
 print("3) La page finale affichera une erreur (« impossible de se connecter ») : c'est normal.")
-print("   Elle copie l'adresse COMPLÈTE de cette page (http://localhost:8080/?state=...&code=...)\n")
+print(
+  "   Elle copie l'adresse COMPLÈTE de cette page (http://localhost:8080/?state=...&code=...)\n"
+)
 
 redirected = input("Colle l'adresse ici : ").strip()
 flow.fetch_token(authorization_response=redirected)

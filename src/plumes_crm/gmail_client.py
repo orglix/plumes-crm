@@ -10,18 +10,18 @@ SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 
 
 def get_gmail_service():
-    # Détermine le chemin du dossier secrets (soit dans /app/secrets, soit localement à la racine)
-    # En local, on cherche dans ./secrets par rapport au répertoire courant ou au projet
-    secrets_dir = Path(os.environ.get("SECRETS_DIR", "./secrets"))
-    token_path = secrets_dir / "token.json"
-    credentials_path = secrets_dir / "credentials.json"
+  # Détermine le chemin du dossier secrets (soit dans /app/secrets, soit localement à la racine)
+  # En local, on cherche dans ./secrets par rapport au répertoire courant ou au projet
+  secrets_dir = Path(os.environ.get("SECRETS_DIR", "./secrets"))
+  token_path = secrets_dir / "token.json"
+  credentials_path = secrets_dir / "credentials.json"
 
-    if not token_path.exists():
-        raise FileNotFoundError(f"Fichier introuvable : {token_path.absolute()}")
+  if not token_path.exists():
+    raise FileNotFoundError(f"Fichier introuvable : {token_path.absolute()}")
 
-    creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
-    if not creds.valid:
-        creds.refresh(Request())
-        token_path.write_text(creds.to_json())
-        token_path.chmod(0o600)
-    return build("gmail", "v1", credentials=creds)
+  creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
+  if not creds.valid:
+    creds.refresh(Request())
+    token_path.write_text(creds.to_json())
+    token_path.chmod(0o600)
+  return build("gmail", "v1", credentials=creds)
