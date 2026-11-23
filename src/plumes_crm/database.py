@@ -55,7 +55,7 @@ class DatabaseRepository:
           cur.execute(
             """
                         INSERT INTO messages (
-                            contact_id, channel, external_id, thread_id, 
+                            contact_id, channel, external_id, thread_id,
                             sender, recipient, subject, raw_payload, direction, sent_at
                         ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (external_id) DO NOTHING
@@ -88,3 +88,31 @@ class DatabaseRepository:
       with conn.cursor() as cur:
         cur.execute("SELECT 1 FROM messages WHERE external_id = %s", (external_id,))
         return cur.fetchone() is not None
+
+  def get_messages_to_clean(self, channel: str = "gmail", limit: int | None = None) -> list[dict]:
+    """Récupère les messages dont cleaned_content est encore NULL."""
+    query = """
+      SELECT id, external_id, subject, raw_payload
+      FROM messages
+      WHERE channel = %s AND cleaned_content IS NULL
+      ORDER BY id ASC
+    """
+    params: list = [channel]
+    if limit is not None:
+      query += " LIMIT %s"
+      params.append(limit)
+
+    with get_db_connection() as conn:
+      with conn.cursor() as cur:
+        cur.execute(query, params)
+        return cur.fetchall()
+
+  def update_cleaned_content(self, message_id: int, cleaned_content: str) -> None:
+    """Met à jour cleaned_content pour un message donné."""
+    with get_db_connection() as conn:
+      with conn.cursor() as cur:
+        cur.execute(
+          "UPDATE messages SET cleaned_content = %s WHERE id = %s",
+          (cleaned_content, message_id),
+        )
+        conn.commit()

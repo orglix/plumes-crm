@@ -4,6 +4,7 @@ from email.utils import parseaddr, parsedate_to_datetime
 from googleapiclient.errors import HttpError
 from plumes_crm.gmail_client import get_gmail_service
 from plumes_crm.database import DatabaseRepository
+from plumes_crm.cleaner import clean_gmail_payload
 
 
 def parse_header(headers, name):
@@ -144,3 +145,10 @@ def sync_gmail_messages():
         break
 
   print(f"Synchronisation terminée. {total_synced} nouveaux messages ajoutés.")
+
+
+def clean_existing_messages(limit: int | None = None):
+  db = DatabaseRepository()
+  for msg in db.get_messages_to_clean(limit=limit):
+    cleaned_content = clean_gmail_payload(msg["raw_payload"])
+    db.update_cleaned_content(msg["id"], cleaned_content)
