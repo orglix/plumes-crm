@@ -18,6 +18,7 @@ build/
 # Données locales, volumes et logs
 data/
 logs/
+config/
 *.log
 *.sql.gz
 *.dump

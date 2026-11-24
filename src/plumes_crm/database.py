@@ -89,6 +89,15 @@ class DatabaseRepository:
         cur.execute("SELECT 1 FROM messages WHERE external_id = %s", (external_id,))
         return cur.fetchone() is not None
 
+  def get_existing_gmail_ids(self) -> set[str]:
+    with get_db_connection() as conn:
+      with conn.cursor() as cur:
+        cur.execute(
+          "SELECT external_id FROM messages WHERE channel = 'Gmail' AND external_id IS NOT NULL"
+        )
+        return {row["external_id"] for row in cur.fetchall()}
+
+
   def get_messages_to_clean(self, channel: str = "gmail", limit: int | None = None) -> list[dict]:
     """Récupère les messages dont cleaned_content est encore NULL."""
     query = """

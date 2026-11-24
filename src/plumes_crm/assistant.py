@@ -6,6 +6,7 @@ from plumes_crm.crm_tools import (
   list_inactive_contacts,
   search_contacts,
 )
+from pathlib import Path
 
 logger = logging.getLogger("plumes_crm.assistant")
 
@@ -15,8 +16,11 @@ litellm.turn_off_message_logging = True
 DEFAULT_MODEL = os.getenv("CRM_LLM_MODEL", "")
 FALLBACK_MODELS = [m.strip() for m in os.getenv("CRM_LLM_FALLBACKS", "").split(",") if m.strip()]
 
-SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", "")
-
+prompt_file = Path("config/system_prompt.txt")
+if prompt_file.exists():
+    SYSTEM_PROMPT = prompt_file.read_text(encoding="utf-8").strip()
+else:
+  raise ValueError("No System Prompt found")
 
 TOOLS = [
   {

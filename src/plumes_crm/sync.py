@@ -1,11 +1,13 @@
 import os
 import time
+import logging
 from email.utils import parseaddr, parsedate_to_datetime
 from googleapiclient.errors import HttpError
 from plumes_crm.gmail_client import get_gmail_service
 from plumes_crm.database import DatabaseRepository
 from plumes_crm.cleaner import clean_gmail_payload
 
+logger = logging.getLogger("plumes_crm.assistant")
 
 def parse_header(headers, name):
   for h in headers:
@@ -28,10 +30,7 @@ def execute_with_quota_retry(request_builder, max_retries=5, base_sleep=20):
       time.sleep(wait_time)
 
 
-def sync_gmail_messages():
-  service = get_gmail_service()
-  db = DatabaseRepository()
-
+def getTargetLabel(service) -> set[str]:
   root_label = os.environ.get("GMAIL_LABEL", "Plumes Créatives")
 
   labels_res = execute_with_quota_retry(lambda: service.users().labels().list(userId="me")).get(
@@ -43,83 +42,101 @@ def sync_gmail_messages():
   ]
 
   if not target_label_ids:
-    print(f"Aucun libellé trouvé pour '{root_label}'")
-    return
+    raise ValueErrir(f"Aucun libellé trouvé pour '{root_label}'")
+  return target_label_ids
 
+def list_label_message_ids(service, label_id: str) -> list[str]:
+  message_ids: list[str] = []
+  page_token: str | None = None
+
+  while True:
+    resp = (
+      service.users()
+      .messages()
+      .list(
+        userId="me",
+        labelIds=[label_id],
+        maxResults=500,
+        pageToken=page_token,
+      )
+      .execute()
+    )
+    for msg in resp.get("messages", []):
+      message_ids.append(msg["id"])
+
+    page_token = resp.get("nextPageToken")
+    if not page_token:
+      break
+
+  return message_ids
+
+def sync_gmail_messages():
+  service = get_gmail_service()
+  db = DatabaseRepository()
+
+  target_label_ids = getTargetLabel(service)
   print(f"Synchronisation pour {len(target_label_ids)} libellé(s).")
 
   profile = execute_with_quota_retry(lambda: service.users().getProfile(userId="me"))
   my_email = profile.get("emailAddress", "").lower()
 
-  total_synced = 0
-
   for label_id in target_label_ids:
-    page_token = None
-    while True:
+    existing_ids = db.get_existing_gmail_ids()
+    gmail_ids = list_label_message_ids(service, label_id)
+
+    new_ids = [mid for mid in gmail_ids if mid not in existing_ids]
+    logger.info(
+      f"{len(gmail_ids)} messages dans le libellé, {len(existing_ids)} déjà en base -> {len(new_ids)} nouveaux à importer."
+    )
+
+    total_synced = 0
+
+    for msg_id in new_ids:
+      # Évite de consommer 5 unités API si déjà importé -> doublon ??
+      if db.message_exists(msg_id):
+        continue
+
       try:
-        results = execute_with_quota_retry(
-          lambda pt=page_token: (
+        msg_full = execute_with_quota_retry(
+          lambda mid=msg_id: (
             service.users()
             .messages()
-            .list(
+            .get(
               userId="me",
-              labelIds=[label_id],
-              pageToken=pt,
+              id=mid,
+              format="full",
             )
           )
         )
       except HttpError as e:
-        print(f"Erreur lors du listage ({label_id}) : {e}")
-        break
+        print(f"Échec pour le message {msg_id}: {e}")
+        continue
 
-      for msg_summary in results.get("messages", []):
-        msg_id = msg_summary["id"]
+      payload = msg_full.get("payload", {})
+      headers = payload.get("headers", [])
 
-        # Évite de consommer 5 unités API si déjà importé
-        if db.message_exists(msg_id):
-          continue
+      subject = parse_header(headers, "Subject")
+      sender_raw = parse_header(headers, "From")
+      recipient_raw = parse_header(headers, "To")
+      date_str = parse_header(headers, "Date")
 
+      _, sender_email = parseaddr(sender_raw)
+      _, recipient_email = parseaddr(recipient_raw)
+
+      direction = "outbound" if sender_email.lower() == my_email else "inbound"
+      contact_email = sender_email if direction == "inbound" else recipient_email
+      contact_name = (
+        parseaddr(sender_raw)[0] if direction == "inbound" else parseaddr(recipient_raw)[0]
+      )
+
+      contact_id = db.upsert_contact(email=contact_email, name=contact_name)
+
+      sent_at = None
+      if date_str:
         try:
-          msg_full = execute_with_quota_retry(
-            lambda mid=msg_id: (
-              service.users()
-              .messages()
-              .get(
-                userId="me",
-                id=mid,
-                format="full",
-              )
-            )
-          )
-        except HttpError as e:
-          print(f"Échec pour le message {msg_id}: {e}")
-          continue
-
-        payload = msg_full.get("payload", {})
-        headers = payload.get("headers", [])
-
-        subject = parse_header(headers, "Subject")
-        sender_raw = parse_header(headers, "From")
-        recipient_raw = parse_header(headers, "To")
-        date_str = parse_header(headers, "Date")
-
-        _, sender_email = parseaddr(sender_raw)
-        _, recipient_email = parseaddr(recipient_raw)
-
-        direction = "outbound" if sender_email.lower() == my_email else "inbound"
-        contact_email = sender_email if direction == "inbound" else recipient_email
-        contact_name = (
-          parseaddr(sender_raw)[0] if direction == "inbound" else parseaddr(recipient_raw)[0]
-        )
-
-        contact_id = db.upsert_contact(email=contact_email, name=contact_name)
-
-        sent_at = None
-        if date_str:
-          try:
-            sent_at = parsedate_to_datetime(date_str)
-          except Exception:
-            pass
+          sent_at = parsedate_to_datetime(date_str)
+        except Exception:
+          pass
 
         message_data = {
           "channel": "gmail",
@@ -140,9 +157,6 @@ def sync_gmail_messages():
 
         time.sleep(0.4)
 
-      page_token = results.get("nextPageToken")
-      if not page_token:
-        break
 
   print(f"Synchronisation terminée. {total_synced} nouveaux messages ajoutés.")
 
