@@ -1,5 +1,5 @@
 import sys, logging
-from plumes_crm.sync import sync_gmail_messages, clean_existing_messages
+from plumes_crm.sync import sync_gmail_messages #, clean_existing_messages
 from plumes_crm.assistant import run_chat_turn
 
 
@@ -35,13 +35,18 @@ def run_cli_chat() -> None:
 
 
 def main():
+  logging.basicConfig(
+      level=logging.INFO,
+      format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+      force=True,
+  )
   if len(sys.argv) > 1 and sys.argv[1] == "sync-gmail":
     print("Lancement de la synchronisation Gmail...")
     sync_gmail_messages()
-  elif len(sys.argv) > 1 and sys.argv[1] == "clean-messages":
-    limit = int(sys.argv[2]) if len(sys.argv) > 2 else 20
-    print(f"Nettoyage de {limit} message(s) en attente...")
-    clean_existing_messages(limit=limit)
+  # elif len(sys.argv) > 1 and sys.argv[1] == "clean-messages":
+  #   limit = int(sys.argv[2]) if len(sys.argv) > 2 else 20
+  #   print(f"Nettoyage de {limit} message(s) en attente...")
+  #   clean_existing_messages(limit=limit)
   elif len(sys.argv) > 1 and sys.argv[1] == "chat":
     run_cli_chat()
   elif len(sys.argv) > 1 and sys.argv[1] == "serve":

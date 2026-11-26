@@ -1,33 +1,55 @@
-import os
-import time
-import logging
+import base64
+from datetime import datetime, timezone
 from email.utils import parseaddr, parsedate_to_datetime
-from googleapiclient.errors import HttpError
-from plumes_crm.gmail_client import get_gmail_service
+import re
+from typing import Any
+import time
+from typing import Callable, TypeVar
+import os
 from plumes_crm.database import DatabaseRepository
-from plumes_crm.cleaner import clean_gmail_payload
-
+import logging
+import json
 logger = logging.getLogger("plumes_crm.assistant")
 
-def parse_header(headers, name):
-  for h in headers:
-    if h.get("name", "").lower() == name.lower():
-      return h.get("value", "")
-  return ""
+T = TypeVar("T")
 
+from plumes_crm.database import get_db_connection
 
-def execute_with_quota_retry(request_builder, max_retries=5, base_sleep=20):
-  """Exécute une requête Google API en gérant le 429/403 rateLimitExceeded."""
-  for attempt in range(max_retries):
+SYSTEM_FORM_EMAIL = "wordpress@plumes-creatives.fr"
+
+def execute_with_quota_retry(
+    request_builder: Callable[[], object],
+    max_retries: int = 5,
+    base_sleep: float = 20.0,
+) -> T:
+  """Exécute `request_builder().execute()` avec backoff sur erreurs de quota/réseau."""
+  for attempt in range(max_retries + 1):
     try:
-      return request_builder().execute()
-    except HttpError as e:
-      is_quota = e.resp.status in (403, 429) and "quota" in str(e).lower()
-      if not is_quota or attempt == max_retries - 1:
+      req = request_builder()
+      return req.execute()  # type: ignore[attr-defined, return-value]
+    except Exception as exc:
+      msg = str(exc).lower()
+      is_quota = (
+          "429" in msg
+          or "ratelimitexceeded" in msg
+          or "quota" in msg
+          or "user rate limit exceeded" in msg
+      )
+      is_transient = (
+          is_quota
+          or "500" in msg
+          or "502" in msg
+          or "503" in msg
+          or "504" in msg
+          or "backenderror" in msg
+          or "timed out" in msg
+      )
+      if not is_transient or attempt >= max_retries:
         raise
-      wait_time = base_sleep * (2**attempt)
-      print(f"Quota Gmail atteint (essai {attempt + 1}/{max_retries}). Pause de {wait_time}s...")
-      time.sleep(wait_time)
+      sleep_s = base_sleep * (2**attempt)
+      time.sleep(sleep_s)
+
+  raise RuntimeError("Retries épuisés")
 
 
 def getTargetLabel(service) -> set[str]:
@@ -45,124 +67,318 @@ def getTargetLabel(service) -> set[str]:
     raise ValueErrir(f"Aucun libellé trouvé pour '{root_label}'")
   return target_label_ids
 
-def list_label_message_ids(service, label_id: str) -> list[str]:
-  message_ids: list[str] = []
-  page_token: str | None = None
 
+def _extract_header(headers: list[dict[str, str]], name: str) -> str:
+  target = name.lower()
+  for h in headers:
+    if (h.get("name") or "").lower() == target:
+      return h.get("value") or ""
+  return ""
+
+
+def _decode_b64url(data: str | None) -> str:
+  if not data:
+    return ""
+  padded = data + "=" * (-len(data) % 4)
+  return base64.urlsafe_b64decode(padded.encode("utf-8")).decode(
+      "utf-8", errors="replace"
+  )
+
+
+def _strip_html(raw_html: str) -> str:
+  text = re.sub(
+      r"<(script|style)[^>]*>.*?</\1>", "", raw_html, flags=re.S | re.I
+  )
+  text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
+  text = re.sub(r"</p\s*>", "\n\n", text, flags=re.I)
+  text = re.sub(r"<[^>]+>", " ", text)
+  return re.sub(r"[ \t]+", " ", text).strip()
+
+
+def _extract_plain_body(payload: dict[str, Any]) -> str:
+  """Extrait le corps texte (priorité text/plain, repli sur text/html nettoyé)."""
+  mime = (payload.get("mimeType") or "").lower()
+  body_data = (payload.get("body") or {}).get("data")
+
+  if mime == "text/plain" and body_data:
+    return _decode_b64url(body_data).strip()
+
+  html_fallback = ""
+  for part in payload.get("parts") or []:
+    part_mime = (part.get("mimeType") or "").lower()
+    if part_mime == "text/plain":
+      txt = _decode_b64url((part.get("body") or {}).get("data")).strip()
+      if txt:
+        return txt
+    elif part_mime == "text/html" and not html_fallback:
+      html_fallback = _strip_html(
+          _decode_b64url((part.get("body") or {}).get("data"))
+      )
+    elif part_mime.startswith("multipart/"):
+      nested = _extract_plain_body(part)
+      if nested:
+        return nested
+
+  if mime == "text/html" and body_data:
+    return _strip_html(_decode_b64url(body_data))
+
+  return html_fallback
+
+
+def _clean_email_reply(text: str) -> str:
+  """Supprime les citations historiques ('Le ... a écrit :') et espaces superflus."""
+  lines: list[str] = []
+  for line in text.splitlines():
+    stripped = line.strip()
+    if stripped.startswith(">"):
+      continue
+    if re.match(r"^Le\s.+a\s+écrit\s*:$", stripped):
+      break
+    if re.match(r"^On\s.+wrote:$", stripped):
+      break
+    lines.append(line)
+  return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
+def _resolve_contact_and_identity(
+    cur,
+    target_email: str,
+    display_name: str | None,
+) -> tuple[int, int]:
+  """Retourne (contact_id, identity_id) depuis channels, ou crée le contact + channel."""
+  email_norm = target_email.strip().lower()
+
+  cur.execute(
+      """
+        SELECT id, contact_id
+        FROM channels
+        WHERE channel = 'gmail' AND identifier = %s
+        """,
+      (email_norm,),
+  )
+  existing = cur.fetchone()
+  if existing:
+    return existing["contact_id"], existing["id"]
+
+  contact_name = (display_name or "").strip() or email_norm.split("@")[0]
+  cur.execute(
+      """
+        INSERT INTO contacts (name, detected_status)
+        VALUES (%s, 'active')
+        RETURNING id
+        """,
+      (contact_name,),
+  )
+  contact_id = cur.fetchone()["id"]
+
+  cur.execute(
+      """
+        INSERT INTO channels (contact_id, channel, identifier)
+        VALUES (%s, 'gmail', %s)
+        ON CONFLICT (channel, identifier) DO UPDATE
+            SET contact_id = channels.contact_id
+        RETURNING id
+        """,
+      (contact_id, email_norm),
+  )
+  identity_id = cur.fetchone()["id"]
+  return contact_id, identity_id
+
+
+def _get_label_id(service, label_name: str) -> str:
+  resp = service.users().labels().list(userId="me").execute()
+  for lbl in resp.get("labels", []):
+    if lbl.get("name") == label_name:
+      return lbl["id"]
+  raise ValueError(f"Libellé Gmail introuvable : '{label_name}'")
+
+
+def _list_label_message_ids(service, label_id: str) -> list[str]:
+  ids: list[str] = []
+  page_token: str | None = None
   while True:
     resp = (
-      service.users()
-      .messages()
-      .list(
-        userId="me",
-        labelIds=[label_id],
-        maxResults=500,
-        pageToken=page_token,
-      )
-      .execute()
+        service.users()
+        .messages()
+        .list(
+            userId="me",
+            labelIds=[label_id],
+            pageToken=page_token,
+            maxResults=500,
+        )
+        .execute()
     )
-    for msg in resp.get("messages", []):
-      message_ids.append(msg["id"])
-
+    ids.extend(m["id"] for m in resp.get("messages", []))
     page_token = resp.get("nextPageToken")
     if not page_token:
       break
+  return ids
 
-  return message_ids
+from plumes_crm.gmail_client import get_gmail_service
 
-def sync_gmail_messages():
+def sync_gmail_messages() -> dict[str, Any]:
+  """Synchronise les nouveaux messages Gmail d'un libellé vers PostgreSQL.
+  Returns:
+      Statistiques d'import et ensemble des contact_id mis à jour.
+  """
   service = get_gmail_service()
   db = DatabaseRepository()
-
   target_label_ids = getTargetLabel(service)
-  print(f"Synchronisation pour {len(target_label_ids)} libellé(s).")
+  if not target_label_ids:
+    return {"imported": 0, "skipped": 0, "updated_contact_ids": set()}
 
+  print(f"Synchronisation pour {len(target_label_ids)} libellé(s).")
   profile = execute_with_quota_retry(lambda: service.users().getProfile(userId="me"))
   my_email = profile.get("emailAddress", "").lower()
+  my_emails_norm = {my_email} if my_email else set()
+  my_emails_norm.add("contact@plumes-creatives.fr")
 
+  existing_ids = set(db.get_existing_gmail_ids())
+
+  all_gmail_ids: list[str] = []
+  seen_gmail_ids: set[str] = set()
   for label_id in target_label_ids:
-    existing_ids = db.get_existing_gmail_ids()
-    gmail_ids = list_label_message_ids(service, label_id)
+    label_msg_ids = _list_label_message_ids(service, label_id)
+    for mid in label_msg_ids:
+      if mid not in seen_gmail_ids:
+        seen_gmail_ids.add(mid)
+        all_gmail_ids.append(mid)
 
-    new_ids = [mid for mid in gmail_ids if mid not in existing_ids]
+  missing_ids = [mid for mid in all_gmail_ids if mid not in existing_ids]
+  logger.info(
+      f"{len(all_gmail_ids)} messages dans les libellés, {len(existing_ids)}"
+      f" déjà en base -> {len(missing_ids)} nouveaux à importer."
+  )
+  total_missing = len(missing_ids)
+  imported = 0
+  updated_contact_ids: set[int] = set()
+  return {
+      "imported": imported,
+      "skipped": len(existing_ids),
+      "updated_contact_ids": updated_contact_ids,
+  }
+
+
+  # 2. Import de chaque nouveau message
+  for mid in missing_ids:
     logger.info(
-      f"{len(gmail_ids)} messages dans le libellé, {len(existing_ids)} déjà en base -> {len(new_ids)} nouveaux à importer."
-    )
-
-    total_synced = 0
-
-    for msg_id in new_ids:
-      # Évite de consommer 5 unités API si déjà importé -> doublon ??
-      if db.message_exists(msg_id):
-        continue
-
-      try:
-        msg_full = execute_with_quota_retry(
-          lambda mid=msg_id: (
-            service.users()
-            .messages()
-            .get(
-              userId="me",
-              id=mid,
-              format="full",
-            )
+          f"Progression : {imported}/{total_missing} importés)"
           )
-        )
-      except HttpError as e:
-        print(f"Échec pour le message {msg_id}: {e}")
-        continue
+    raw_msg = execute_with_quota_retry(
+      lambda msg_id=mid:
+        service.users()
+        .messages()
+        .get(userId="me", id=mid, format="full")
+    )
+    payload = raw_msg.get("payload") or {}
+    headers = payload.get("headers") or []
 
-      payload = msg_full.get("payload", {})
-      headers = payload.get("headers", [])
+    from_name, from_email = parseaddr(_extract_header(headers, "From"))
+    to_name, to_email = parseaddr(_extract_header(headers, "To"))
+    reply_name, reply_email = parseaddr(_extract_header(headers, "Reply-To"))
+    subject = _extract_header(headers, "Subject").strip()
+    date_header = _extract_header(headers, "Date")
 
-      subject = parse_header(headers, "Subject")
-      sender_raw = parse_header(headers, "From")
-      recipient_raw = parse_header(headers, "To")
-      date_str = parse_header(headers, "Date")
+    from_email = from_email.strip().lower()
+    to_email = to_email.strip().lower()
+    reply_email = reply_email.strip().lower()
 
-      _, sender_email = parseaddr(sender_raw)
-      _, recipient_email = parseaddr(recipient_raw)
+    # Déterminer direction et interlocuteur cible
+    if from_email in my_emails_norm:
+      direction = "outbound"
+      target_email = to_email
+      target_name = to_name
+    else:
+      direction = "inbound"
+      if (
+          from_email == SYSTEM_FORM_EMAIL
+          and reply_email
+          and reply_email != SYSTEM_FORM_EMAIL
+      ):
+        target_email = reply_email
+        target_name = from_name or reply_name
+      else:
+        target_email = from_email
+        target_name = from_name
 
-      direction = "outbound" if sender_email.lower() == my_email else "inbound"
-      contact_email = sender_email if direction == "inbound" else recipient_email
-      contact_name = (
-        parseaddr(sender_raw)[0] if direction == "inbound" else parseaddr(recipient_raw)[0]
+    if not target_email:
+      continue
+
+    try:
+      sent_at = (
+          parsedate_to_datetime(date_header)
+          if date_header
+          else datetime.now(timezone.utc)
       )
+      if sent_at.tzinfo is None:
+        sent_at = sent_at.replace(tzinfo=timezone.utc)
+    except Exception:
+      sent_at = datetime.now(timezone.utc)
 
-      contact_id = db.upsert_contact(email=contact_email, name=contact_name)
+    raw_body = _extract_plain_body(payload)
+    cleaned_content = _clean_email_reply(raw_body)
 
-      sent_at = None
-      if date_str:
-        try:
-          sent_at = parsedate_to_datetime(date_str)
-        except Exception:
-          pass
+    with get_db_connection() as conn:
+      with conn.cursor() as cur:
+        contact_id, identity_id = _resolve_contact_and_identity(
+            cur=cur,
+            target_email=target_email,
+            display_name=target_name,
+        )
+        thread_id = raw_msg.get("threadId")
+        raw_payload_json = json.dumps(raw_msg, ensure_ascii=False)
+        cur.execute(
+            """
+            INSERT INTO messages (
+                contact_id,
+                identity_id,
+                external_id,
+                thread_id,
+                channel,
+                sender,
+                recipient,
+                subject,
+                raw_payload,
+                cleaned_content,
+                direction,
+                sent_at
+            )
+            VALUES (%s, %s, %s, %s, 'gmail', %s, %s, %s, %s::jsonb, %s, %s, %s)
+            ON CONFLICT (external_id) DO NOTHING
+            RETURNING id
+            """,
+            (
+                contact_id,
+                identity_id,
+                mid,
+                thread_id,
+                from_email or target_email,
+                to_email or None,
+                subject,
+                raw_payload_json,
+                cleaned_content,
+                direction,
+                sent_at,
+            ),
+        )
+        if cur.fetchone():
+          cur.execute(
+              """
+                        UPDATE contacts
+                        SET last_interaction_at = GREATEST(
+                            COALESCE(last_interaction_at, %s),
+                            %s
+                        )
+                        WHERE id = %s
+                        """,
+              (sent_at, sent_at, contact_id),
+          )
+          imported += 1
+          updated_contact_ids.add(contact_id)
+      conn.commit()
 
-        message_data = {
-          "channel": "gmail",
-          "external_id": msg_id,
-          "thread_id": msg_full.get("threadId"),
-          "sender": sender_email or sender_raw,
-          "recipient": recipient_email or recipient_raw,
-          "subject": subject,
-          "raw_payload": msg_full,
-          "direction": direction,
-          "sent_at": sent_at,
-          "contact_id": contact_id,
-        }
-
-        if db.save_message(message_data):
-          total_synced += 1
-          print(f"  [+] Message importé : {subject[:50]} ({msg_id})")
-
-        time.sleep(0.4)
-
-
-  print(f"Synchronisation terminée. {total_synced} nouveaux messages ajoutés.")
-
-
-def clean_existing_messages(limit: int | None = None):
-  db = DatabaseRepository()
-  for msg in db.get_messages_to_clean(limit=limit):
-    cleaned_content = clean_gmail_payload(msg["raw_payload"])
-    db.update_cleaned_content(msg["id"], cleaned_content)
+  return {
+      "imported": imported,
+      "skipped": len(existing_ids),
+      "updated_contact_ids": updated_contact_ids,
+  }

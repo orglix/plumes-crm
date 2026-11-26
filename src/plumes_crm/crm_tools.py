@@ -27,28 +27,33 @@ def get_contact_messages(
   limit: int | None = None,
   max_chars: int | None = None,
 ) -> str:
-  """Récupère les messages nettoyés récents d'un contact donné."""
+  """Récupère les messages nettoyés d'un contact donné."""
+  contact_ids = [contact_id] if isinstance(contact_id, int) else list(contact_id)
   effective_limit = limit if limit is not None else DEFAULT_MSG_LIMIT
   effective_max_chars = max_chars if max_chars is not None else DEFAULT_MSG_MAX_CHARS
 
   if effective_max_chars and effective_max_chars > 0:
     content_expr = "LEFT(COALESCE(cleaned_content, ''), %s) AS content"
-    params = (effective_max_chars, contact_id, effective_limit)
+    params: list[object] = [effective_max_chars, contact_ids]
   else:
     content_expr = "COALESCE(cleaned_content, '') AS content"
-    params = (contact_id, effective_limit)
+    params = [contact_ids]
+
+  limit_clause = ""
+  if effective_limit is not None and effective_limit > 0:
+    limit_clause = "\n    LIMIT %s"
+    params.append(effective_limit)
 
   sql = f"""
-    SELECT id, channel, direction, subject, sent_at,
+    SELECT id, thread_id, channel, direction, sender, subject, sent_at,
            {content_expr}
     FROM messages
     WHERE contact_id = ANY(%s)
-    ORDER BY sent_at DESC NULLS LAST, id DESC
-    LIMIT %s
+    ORDER BY sent_at ASC NULLS LAST, id ASC{limit_clause}
   """
   with get_db_connection() as conn:
     with conn.cursor() as cur:
-      cur.execute(sql, params)
+      cur.execute(sql, tuple(params))
       rows = cur.fetchall()
   return json.dumps(rows, default=str, ensure_ascii=False)
 

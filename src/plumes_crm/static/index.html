@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Plumes Créatives — Assistant CRM</title>
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --surface: #ffffff;
+      --border: #e2e8f0;
+      --text: #1e293b;
+      --muted: #64748b;
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --user-bg: #2563eb;
+      --bot-bg: #f1f5f9;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0.9rem 1.5rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    header h1 {
+      margin: 0;
+      font-size: 1.15rem;
+      font-weight: 700;
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+    }
+
+    .btn-link, .btn-reset {
+      font-size: 0.875rem;
+      font-weight: 600;
+      padding: 0.45rem 0.85rem;
+      border-radius: 6px;
+      text-decoration: none;
+      cursor: pointer;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      transition: background 0.15s ease;
+    }
+
+    .btn-link:hover, .btn-reset:hover {
+      background: #f1f5f9;
+    }
+
+    .btn-link {
+      border-color: #bfdbfe;
+      background: #eff6ff;
+      color: #1d4ed8;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+    }
+
+    .badge-count {
+      background: #e2e8f0;
+      color: #334155;
+      font-size: 0.78rem;
+      font-weight: 700;
+      padding: 0.1rem 0.45rem;
+      border-radius: 999px;
+    }
+
+    .badge-count.has-items {
+      background: #dc2626;
+      color: #ffffff;
+    }
+
+    .btn-link:hover {
+      background: #dbeafe;
+    }
+
+    main {
+      flex: 1;
+      max-width: 900px;
+      width: 100%;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      padding: 1rem;
+      overflow: hidden;
+    }
+
+    #messages {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 0.85rem;
+      padding: 0.5rem 0.25rem 1rem;
+    }
+
+    .msg {
+      max-width: 82%;
+      padding: 0.8rem 1rem;
+      border-radius: 12px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      font-size: 0.95rem;
+    }
+
+    .msg.user {
+      align-self: flex-end;
+      background: var(--user-bg);
+      color: #ffffff;
+      border-bottom-right-radius: 4px;
+    }
+
+    .msg.bot {
+      align-self: flex-start;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-bottom-left-radius: 4px;
+    }
+
+    .msg.status {
+      align-self: flex-start;
+      background: transparent;
+      color: var(--muted);
+      font-style: italic;
+      padding: 0.25rem 0.5rem;
+    }
+
+    form {
+      display: flex;
+      gap: 0.65rem;
+      padding-top: 0.75rem;
+      border-top: 1px solid var(--border);
+      background: var(--bg);
+    }
+
+    input[type="text"] {
+      flex: 1;
+      padding: 0.75rem 1rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 0.95rem;
+      background: var(--surface);
+      color: var(--text);
+    }
+
+    input[type="text"]:focus {
+      outline: none;
+      border-color: var(--primary);
+    }
+
+    button[type="submit"] {
+      padding: 0.75rem 1.25rem;
+      background: var(--primary);
+      color: #ffffff;
+      border: none;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 0.95rem;
+      cursor: pointer;
+    }
+
+    button[type="submit"]:hover:not(:disabled) {
+      background: var(--primary-hover);
+    }
+
+    button[type="submit"]:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Plumes Créatives — Assistant CRM</h1>
+    <div class="header-actions">
+      <a href="/duplicates" class="btn-link">
+        Regrouper les contacts
+        <span id="dup-count" class="badge-count">__DUPLICATE_COUNT__</span>
+      </a>
+      <button type="button" class="btn-reset" onclick="resetSession()">Nouvelle session</button>
+    </div>
+  </header>
+
+  <main>
+    <div id="messages"></div>
+
+    <form id="chat-form">
+      <input
+        type="text"
+        id="chat-input"
+        placeholder="Pose une question sur tes contacts, échanges ou relances..."
+        autocomplete="off"
+        required
+      />
+      <button type="submit" id="send-btn">Envoyer</button>
+    </form>
+  </main>
+
+  <script>
+    const messagesEl = document.getElementById("messages");
+    const form = document.getElementById("chat-form");
+    const input = document.getElementById("chat-input");
+    const sendBtn = document.getElementById("send-btn");
+
+    let sessionId = localStorage.getItem("crm_session_id") || "";
+    const dupBadge = document.getElementById("dup-count");
+    const dupCount = parseInt(dupBadge.textContent, 10) || 0;
+    if (dupCount > 0) {
+      dupBadge.classList.add("has-items");
+    }
+    function appendMessage(text, role) {
+      const div = document.createElement("div");
+      div.className = "msg " + role;
+      div.textContent = text;
+      messagesEl.appendChild(div);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      return div;
+    }
+
+    function resetSession() {
+      sessionId = "";
+      localStorage.removeItem("crm_session_id");
+      messagesEl.innerHTML = "";
+    }
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const text = input.value.trim();
+      if (!text) return;
+      input.value = "";
+      appendMessage(text, "user");
+      const statusEl = appendMessage("Recherche dans le CRM et rédaction en cours...", "status");
+      sendBtn.disabled = true;
+
+      try {
+        const res = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: text, session_id: sessionId || null }),
+        });
+        const data = await res.json();
+        statusEl.remove();
+        if (!res.ok) {
+          appendMessage("Erreur : " + (data.detail || res.statusText), "bot");
+        } else {
+          sessionId = data.session_id;
+          localStorage.setItem("crm_session_id", sessionId);
+          appendMessage(data.reply, "bot");
+        }
+      } catch (err) {
+        statusEl.remove();
+        appendMessage("Erreur réseau : " + err.message, "bot");
+      } finally {
+        sendBtn.disabled = false;
+        input.focus();
+      }
+    });
+  </script>
+</body>
+</html>

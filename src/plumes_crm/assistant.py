@@ -18,7 +18,7 @@ FALLBACK_MODELS = [m.strip() for m in os.getenv("CRM_LLM_FALLBACKS", "").split("
 
 prompt_file = Path("config/system_prompt.txt")
 if prompt_file.exists():
-    SYSTEM_PROMPT = prompt_file.read_text(encoding="utf-8").strip()
+  SYSTEM_PROMPT = prompt_file.read_text(encoding="utf-8").strip()
 else:
   raise ValueError("No System Prompt found")
 
