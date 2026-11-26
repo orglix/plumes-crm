@@ -7,12 +7,13 @@ import litellm
 from fastapi import Form, Request, FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 from plumes_crm.merge_service import (
-    find_duplicate_candidates,
-    ignore_duplicate_pair,
-    merge_contacts,
+  find_duplicate_candidates,
+  ignore_duplicate_pair,
+  merge_contacts,
 )
 import json
 import html
+from plumes_crm.database import get_db_connection
 
 logging.basicConfig(
   level=logging.INFO,
@@ -54,9 +55,10 @@ async def index() -> str:
   candidates = find_duplicate_candidates(limit=30)
   index_file = STATIC_DIR / "index.html"
   content = index_file.read_text(encoding="utf-8").replace(
-      "__DUPLICATE_COUNT__", str(len(candidates))
+    "__DUPLICATE_COUNT__", str(len(candidates))
   )
   return HTMLResponse(content=content)
+
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest) -> ChatResponse:
@@ -87,25 +89,17 @@ async def duplicates_page(msg: str | None = None):
   template_path = STATIC_DIR / "duplicates.html"
   raw_html = template_path.read_text(encoding="utf-8")
 
-  safe_msg = (
-      html.escape(msg or "", quote=True)
-      .replace("\\", "\\\\")
-      .replace("\n", " ")
-  )
-  payload = json.dumps(candidates, default=str, ensure_ascii=False).replace(
-      "</", "<\\/"
-  )
+  safe_msg = html.escape(msg or "", quote=True).replace("\\", "\\\\").replace("\n", " ")
+  payload = json.dumps(candidates, default=str, ensure_ascii=False).replace("</", "<\\/")
 
-  rendered = raw_html.replace("__FLASH_MSG__", safe_msg).replace(
-      "__CANDIDATES_JSON__", payload
-  )
+  rendered = raw_html.replace("__FLASH_MSG__", safe_msg).replace("__CANDIDATES_JSON__", payload)
   return HTMLResponse(content=rendered)
 
 
 @app.post("/duplicates/merge")
 async def handle_merge(
-    master_id: int = Form(...),
-    duplicate_id: int = Form(...),
+  master_id: int = Form(...),
+  duplicate_id: int = Form(...),
 ):
   try:
     merge_contacts(master_id=master_id, duplicate_id=duplicate_id)
@@ -114,17 +108,84 @@ async def handle_merge(
     return RedirectResponse(url=f"/duplicates?msg={msg}", status_code=303)
 
   return RedirectResponse(
-      url=f"/duplicates?msg=Contact+%23{duplicate_id}+fusionn%C3%A9+dans+%23{master_id}",
-      status_code=303,
+    url=f"/duplicates?msg=Contact+%23{duplicate_id}+fusionn%C3%A9+dans+%23{master_id}",
+    status_code=303,
   )
+
 
 @app.post("/duplicates/ignore")
 async def handle_ignore(
-    id_a: int = Form(...),
-    id_b: int = Form(...),
+  id_a: int = Form(...),
+  id_b: int = Form(...),
 ):
   ignore_duplicate_pair(id_a, id_b)
   return RedirectResponse(
-      url="/duplicates?msg=Paire+ignor%C3%A9e",
-      status_code=303,
+    url="/duplicates?msg=Paire+ignor%C3%A9e",
+    status_code=303,
   )
+
+
+@app.get("/api/contacts")
+def list_contacts():
+  conn = get_db_connection()
+  with conn.cursor() as cur:
+    cur.execute("""
+            SELECT id, name, email, instagram_handle
+            FROM contacts
+            ORDER BY name ASC NULLS LAST, email ASC NULLS LAST, id ASC
+            """)
+    rows = cur.fetchall()
+
+  return [
+    {
+      "id": r["id"],
+      "name": r["name"] or "",
+      "email": r["email"] or "",
+      "instagram": r["instagram_handle"] or "",
+    }
+    for r in rows
+  ]
+
+
+@app.get("/api/contacts/{contact_id}/summaries")
+def get_contact_thread_summaries(contact_id: int):
+  conn = get_db_connection()
+  with conn.cursor() as cur:
+    cur.execute(
+      """
+            SELECT
+                id,
+                thread_key,
+                summary,
+                categories,
+                message_count,
+                last_message_at,
+                updated_at
+            FROM thread_summaries
+            WHERE contact_id = %s
+            ORDER BY last_message_at DESC NULLS LAST, id DESC
+            """,
+      (contact_id,),
+    )
+    rows = cur.fetchall()
+
+  return [
+    {
+      "id": r["id"],
+      "thread_key": r["thread_key"],
+      "summary": r["summary"],
+      "categories": r["categories"] or [],
+      "message_count": r["message_count"],
+      "last_message_at": r["last_message_at"].isoformat() if r["last_message_at"] else None,
+      "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
+    }
+    for r in rows
+  ]
+
+
+@app.get("/contacts", response_class=HTMLResponse)
+async def contacts_page(msg: str | None = None):
+  template_path = STATIC_DIR / "contact_list.html"
+  raw_html = template_path.read_text(encoding="utf-8")
+
+  return HTMLResponse(content=raw_html)

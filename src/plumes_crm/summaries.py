@@ -13,15 +13,15 @@ from plumes_crm.crm_tools import get_contact_messages
 logger = logging.getLogger(__name__)
 
 ALLOWED_CATEGORIES: tuple[str, ...] = (
-    "coaching",
-    "beta-lecture",
-    "ateliers",
-    "autres",
+  "coaching",
+  "beta-lecture",
+  "ateliers",
+  "autres",
 )
 
 prompt_file = Path("config/system_prompt.txt")
 if prompt_file.exists():
-    BASE_SUMMARY_PROMPT = prompt_file.read_text(encoding="utf-8").strip()
+  BASE_SUMMARY_PROMPT = prompt_file.read_text(encoding="utf-8").strip()
 else:
   raise ValueError("No System Prompt found")
 
@@ -42,6 +42,7 @@ import time
 import re
 from litellm.exceptions import RateLimitError
 
+
 def _extract_retry_after_seconds(exc: Exception, default: float = 35.0) -> float:
   match = re.search(r"try again in\s+([0-9]+(?:\.[0-9]+)?)s", str(exc), re.IGNORECASE)
   if match:
@@ -53,12 +54,12 @@ def complete_summary_prompt(prompt: str, max_rate_limit_retries: int = 2) -> str
   for attempt in range(max_rate_limit_retries + 1):
     try:
       response = litellm.completion(
-          model=DEFAULT_MODEL,
-          fallbacks=[],
-          messages=[{"role": "user", "content": prompt}],
-          temperature=0.2,
-          timeout=60,
-          num_retries=0,
+        model=DEFAULT_MODEL,
+        fallbacks=[],
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.2,
+        timeout=60,
+        num_retries=0,
       )
       return response.choices[0].message.content or ""
     except RateLimitError as exc:
@@ -66,13 +67,14 @@ def complete_summary_prompt(prompt: str, max_rate_limit_retries: int = 2) -> str
         raise
       wait_sec = _extract_retry_after_seconds(exc)
       logger.warning(
-          "Rate limit Groq atteint (TPM). Pause de %.1fs avant nouvelle tentative (%d/%d)...",
-          wait_sec,
-          attempt + 1,
-          max_rate_limit_retries,
+        "Rate limit Groq atteint (TPM). Pause de %.1fs avant nouvelle tentative (%d/%d)...",
+        wait_sec,
+        attempt + 1,
+        max_rate_limit_retries,
       )
       time.sleep(wait_sec)
   return ""
+
 
 def _make_thread_key(msg: dict[str, Any]) -> str:
   raw_thread = msg.get("thread_id")
@@ -114,23 +116,21 @@ def _compute_thread_digest(messages: list[dict[str, Any]]) -> str:
     sender = str(msg.get("sender") or "")
     subject = str(msg.get("subject") or "")
     text = _extract_clean_text(msg)
-    hasher.update(
-        f"{msg_id}|{sent_at}|{direction}|{sender}|{subject}|{text}".encode(
-            "utf-8"
-        )
-    )
+    hasher.update(f"{msg_id}|{sent_at}|{direction}|{sender}|{subject}|{text}".encode("utf-8"))
   return hasher.hexdigest()
 
 
 def _build_transcript(contact_id: int, thread_key: str, messages: list[dict[str, Any]]) -> str:
   lines: list[str] = [
-      f"Contact ID : {contact_id}",
-      f"Thread : {thread_key}",
-      "--- Début de l'échange ---",
+    f"Contact ID : {contact_id}",
+    f"Thread : {thread_key}",
+    "--- Début de l'échange ---",
   ]
   for msg in messages:
     dt = _parse_sent_at(msg.get("sent_at"))
-    ts = dt.isoformat() if dt else (str(msg.get("sent_at")) if msg.get("sent_at") else "date inconnue")
+    ts = (
+      dt.isoformat() if dt else (str(msg.get("sent_at")) if msg.get("sent_at") else "date inconnue")
+    )
     channel = msg.get("channel") or "canal inconnu"
     direction = msg.get("direction") or "direction inconnue"
     sender = msg.get("sender") or "expéditeur inconnu"
@@ -144,15 +144,16 @@ def _build_transcript(contact_id: int, thread_key: str, messages: list[dict[str,
 def _build_prompt(transcript: str, base_prompt: str = BASE_SUMMARY_PROMPT) -> str:
   allowed_str = ", ".join(ALLOWED_CATEGORIES)
   return (
-      f"{base_prompt}\n\n"
-      f"Classe également cet échange dans une ou plusieurs catégories parmi : [{allowed_str}]. "
-      "Un échange peut appartenir à plusieurs catégories si pertinent. "
-      "Utilise 'autres' uniquement si aucune autre catégorie ne convient.\n\n"
-      "N'utilise aucun tool externe.\n\n"
-      "Réponds UNIQUEMENT avec un objet JSON valide de la forme exacte :\n"
-      '{"summary": "texte du résumé", "categories": ["categorie1", "categorie2"]}\n\n'
-      f"{transcript}"
+    f"{base_prompt}\n\n"
+    f"Classe également cet échange dans une ou plusieurs catégories parmi : [{allowed_str}]. "
+    "Un échange peut appartenir à plusieurs catégories si pertinent. "
+    "Utilise 'autres' uniquement si aucune autre catégorie ne convient.\n\n"
+    "N'utilise aucun tool externe.\n\n"
+    "Réponds UNIQUEMENT avec un objet JSON valide de la forme exacte :\n"
+    '{"summary": "texte du résumé", "categories": ["categorie1", "categorie2"]}\n\n'
+    f"{transcript}"
   )
+
 
 def _parse_llm_response_with_meta(raw_response: str) -> tuple[str, list[str], bool]:
   cleaned = raw_response.strip()
@@ -204,7 +205,7 @@ def _get_target_contact_ids(cur: Any, contact_ids: list[int] | None = None) -> l
     return [int(cid) for cid in contact_ids]
 
   cur.execute(
-      """
+    """
       SELECT id
       FROM contacts
       WHERE COALESCE(is_ignored, false) = false
@@ -213,8 +214,10 @@ def _get_target_contact_ids(cur: Any, contact_ids: list[int] | None = None) -> l
   )
   return [row["id"] if isinstance(row, dict) else row[0] for row in cur.fetchall()]
 
+
 from dataclasses import dataclass
 import time
+
 
 @dataclass
 class SummaryRunStats:
@@ -224,14 +227,15 @@ class SummaryRunStats:
   threads_updated: int = 0
   threads_failed: int = 0
 
+
 def generate_thread_summaries(
-    complete_llm: LlmCompleteFn = complete_summary_prompt,
-    fetch_messages: FetchContactMessagesFn = get_contact_messages,
-    contact_ids: list[int] | None = None,
-    messages_limit_per_contact: int | None = None,
-    min_interval_sec: int = 2,
-    base_prompt: str = BASE_SUMMARY_PROMPT,
-    force: bool = False,
+  complete_llm: LlmCompleteFn = complete_summary_prompt,
+  fetch_messages: FetchContactMessagesFn = get_contact_messages,
+  contact_ids: list[int] | None = None,
+  messages_limit_per_contact: int | None = None,
+  min_interval_sec: int = 2,
+  base_prompt: str = BASE_SUMMARY_PROMPT,
+  force: bool = False,
 ) -> int:
   """Génère et met à jour les résumés et catégories par thread dans `thread_summaries`."""
   last_llm_call_at = None
@@ -241,7 +245,7 @@ def generate_thread_summaries(
       logger.info("Traitement des résumés pour %d contact(s)...", len(target_contacts))
 
       for contact_id in target_contacts:
-        SummaryRunStats.contacts_processed+=1
+        SummaryRunStats.contacts_processed += 1
         raw_messages = fetch_messages(contact_id, messages_limit_per_contact)
         if not raw_messages:
           continue
@@ -255,29 +259,31 @@ def generate_thread_summaries(
 
         for thread_key, thread_msgs in grouped.items():
           thread_msgs.sort(
-              key=lambda m: (
-                  _parse_sent_at(m.get("sent_at")) or datetime.max,
-                  int(m.get("id") or 0),
-              )
+            key=lambda m: (
+              _parse_sent_at(m.get("sent_at")) or datetime.max,
+              int(m.get("id") or 0),
+            )
           )
-          SummaryRunStats.threads_found+=1
+          SummaryRunStats.threads_found += 1
           digest = _compute_thread_digest(thread_msgs)
 
           cur.execute(
-              """
+            """
               SELECT source_digest
               FROM thread_summaries
               WHERE contact_id = %s AND thread_key = %s
               """,
-              (contact_id, thread_key),
+            (contact_id, thread_key),
           )
           existing = cur.fetchone()
           existing_digest = (
-              existing["source_digest"] if isinstance(existing, dict) else existing[0]
-          ) if existing else None
+            (existing["source_digest"] if isinstance(existing, dict) else existing[0])
+            if existing
+            else None
+          )
 
           if not force and existing_digest == digest:
-            SummaryRunStats.threads_skipped_unchanged+=1
+            SummaryRunStats.threads_skipped_unchanged += 1
             continue
 
           last_dt = None
@@ -307,7 +313,7 @@ def generate_thread_summaries(
               len(thread_msgs),
               exc,
             )
-            SummaryRunStats.threads_failed+=1
+            SummaryRunStats.threads_failed += 1
             continue
 
           if not raw_llm_out or not raw_llm_out.strip():
@@ -317,7 +323,7 @@ def generate_thread_summaries(
               thread_key,
               len(thread_msgs),
             )
-            SummaryRunStats.threads_failed+=1
+            SummaryRunStats.threads_failed += 1
             continue
 
           summary, categories, used_fallback = _parse_llm_response_with_meta(raw_llm_out)
@@ -328,7 +334,7 @@ def generate_thread_summaries(
               thread_key,
               raw_llm_out[:200],
             )
-            SummaryRunStats.threads_failed+=1
+            SummaryRunStats.threads_failed += 1
             continue
 
           if used_fallback:
@@ -361,15 +367,15 @@ def generate_thread_summaries(
                   last_message_at = EXCLUDED.last_message_at,
                   updated_at = CURRENT_TIMESTAMP
               """,
-              (
-                contact_id,
-                thread_key,
-                summary,
-                categories,
-                digest,
-                len(thread_msgs),
-                last_dt,
-              ),
+            (
+              contact_id,
+              thread_key,
+              summary,
+              categories,
+              digest,
+              len(thread_msgs),
+              last_dt,
+            ),
           )
           if cur.rowcount != 1:
             logger.warning(
@@ -378,10 +384,10 @@ def generate_thread_summaries(
               contact_id,
               thread_key,
             )
-            SummaryRunStats.threads_failed+=1
+            SummaryRunStats.threads_failed += 1
             continue
 
-          SummaryRunStats.threads_updated+=1
+          SummaryRunStats.threads_updated += 1
           logger.info(
             "Résumé enregistré : contact_id=%s thread_key=%s categories=%s msgs=%d",
             contact_id,
@@ -391,5 +397,5 @@ def generate_thread_summaries(
           )
     conn.commit()
 
-#  logger.info("Génération terminée : %d résumé(s) de thread enregistré(s).", updated_count)
+  #  logger.info("Génération terminée : %d résumé(s) de thread enregistré(s).", updated_count)
   return SummaryRunStats

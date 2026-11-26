@@ -9,6 +9,7 @@ import os
 from plumes_crm.database import DatabaseRepository
 import logging
 import json
+
 logger = logging.getLogger("plumes_crm.assistant")
 
 T = TypeVar("T")
@@ -17,10 +18,11 @@ from plumes_crm.database import get_db_connection
 
 SYSTEM_FORM_EMAIL = "wordpress@plumes-creatives.fr"
 
+
 def execute_with_quota_retry(
-    request_builder: Callable[[], object],
-    max_retries: int = 5,
-    base_sleep: float = 20.0,
+  request_builder: Callable[[], object],
+  max_retries: int = 5,
+  base_sleep: float = 20.0,
 ) -> T:
   """Exécute `request_builder().execute()` avec backoff sur erreurs de quota/réseau."""
   for attempt in range(max_retries + 1):
@@ -30,19 +32,19 @@ def execute_with_quota_retry(
     except Exception as exc:
       msg = str(exc).lower()
       is_quota = (
-          "429" in msg
-          or "ratelimitexceeded" in msg
-          or "quota" in msg
-          or "user rate limit exceeded" in msg
+        "429" in msg
+        or "ratelimitexceeded" in msg
+        or "quota" in msg
+        or "user rate limit exceeded" in msg
       )
       is_transient = (
-          is_quota
-          or "500" in msg
-          or "502" in msg
-          or "503" in msg
-          or "504" in msg
-          or "backenderror" in msg
-          or "timed out" in msg
+        is_quota
+        or "500" in msg
+        or "502" in msg
+        or "503" in msg
+        or "504" in msg
+        or "backenderror" in msg
+        or "timed out" in msg
       )
       if not is_transient or attempt >= max_retries:
         raise
@@ -80,15 +82,11 @@ def _decode_b64url(data: str | None) -> str:
   if not data:
     return ""
   padded = data + "=" * (-len(data) % 4)
-  return base64.urlsafe_b64decode(padded.encode("utf-8")).decode(
-      "utf-8", errors="replace"
-  )
+  return base64.urlsafe_b64decode(padded.encode("utf-8")).decode("utf-8", errors="replace")
 
 
 def _strip_html(raw_html: str) -> str:
-  text = re.sub(
-      r"<(script|style)[^>]*>.*?</\1>", "", raw_html, flags=re.S | re.I
-  )
+  text = re.sub(r"<(script|style)[^>]*>.*?</\1>", "", raw_html, flags=re.S | re.I)
   text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
   text = re.sub(r"</p\s*>", "\n\n", text, flags=re.I)
   text = re.sub(r"<[^>]+>", " ", text)
@@ -111,9 +109,7 @@ def _extract_plain_body(payload: dict[str, Any]) -> str:
       if txt:
         return txt
     elif part_mime == "text/html" and not html_fallback:
-      html_fallback = _strip_html(
-          _decode_b64url((part.get("body") or {}).get("data"))
-      )
+      html_fallback = _strip_html(_decode_b64url((part.get("body") or {}).get("data")))
     elif part_mime.startswith("multipart/"):
       nested = _extract_plain_body(part)
       if nested:
@@ -141,20 +137,20 @@ def _clean_email_reply(text: str) -> str:
 
 
 def _resolve_contact_and_identity(
-    cur,
-    target_email: str,
-    display_name: str | None,
+  cur,
+  target_email: str,
+  display_name: str | None,
 ) -> tuple[int, int]:
   """Retourne (contact_id, identity_id) depuis channels, ou crée le contact + channel."""
   email_norm = target_email.strip().lower()
 
   cur.execute(
-      """
+    """
         SELECT id, contact_id
         FROM channels
         WHERE channel = 'gmail' AND identifier = %s
         """,
-      (email_norm,),
+    (email_norm,),
   )
   existing = cur.fetchone()
   if existing:
@@ -162,24 +158,24 @@ def _resolve_contact_and_identity(
 
   contact_name = (display_name or "").strip() or email_norm.split("@")[0]
   cur.execute(
-      """
+    """
         INSERT INTO contacts (name, detected_status)
         VALUES (%s, 'active')
         RETURNING id
         """,
-      (contact_name,),
+    (contact_name,),
   )
   contact_id = cur.fetchone()["id"]
 
   cur.execute(
-      """
+    """
         INSERT INTO channels (contact_id, channel, identifier)
         VALUES (%s, 'gmail', %s)
         ON CONFLICT (channel, identifier) DO UPDATE
             SET contact_id = channels.contact_id
         RETURNING id
         """,
-      (contact_id, email_norm),
+    (contact_id, email_norm),
   )
   identity_id = cur.fetchone()["id"]
   return contact_id, identity_id
@@ -198,15 +194,15 @@ def _list_label_message_ids(service, label_id: str) -> list[str]:
   page_token: str | None = None
   while True:
     resp = (
-        service.users()
-        .messages()
-        .list(
-            userId="me",
-            labelIds=[label_id],
-            pageToken=page_token,
-            maxResults=500,
-        )
-        .execute()
+      service.users()
+      .messages()
+      .list(
+        userId="me",
+        labelIds=[label_id],
+        pageToken=page_token,
+        maxResults=500,
+      )
+      .execute()
     )
     ids.extend(m["id"] for m in resp.get("messages", []))
     page_token = resp.get("nextPageToken")
@@ -214,7 +210,9 @@ def _list_label_message_ids(service, label_id: str) -> list[str]:
       break
   return ids
 
+
 from plumes_crm.gmail_client import get_gmail_service
+
 
 def sync_gmail_messages() -> dict[str, Any]:
   """Synchronise les nouveaux messages Gmail d'un libellé vers PostgreSQL.
@@ -246,29 +244,23 @@ def sync_gmail_messages() -> dict[str, Any]:
 
   missing_ids = [mid for mid in all_gmail_ids if mid not in existing_ids]
   logger.info(
-      f"{len(all_gmail_ids)} messages dans les libellés, {len(existing_ids)}"
-      f" déjà en base -> {len(missing_ids)} nouveaux à importer."
+    f"{len(all_gmail_ids)} messages dans les libellés, {len(existing_ids)}"
+    f" déjà en base -> {len(missing_ids)} nouveaux à importer."
   )
   total_missing = len(missing_ids)
   imported = 0
   updated_contact_ids: set[int] = set()
   return {
-      "imported": imported,
-      "skipped": len(existing_ids),
-      "updated_contact_ids": updated_contact_ids,
+    "imported": imported,
+    "skipped": len(existing_ids),
+    "updated_contact_ids": updated_contact_ids,
   }
-
 
   # 2. Import de chaque nouveau message
   for mid in missing_ids:
-    logger.info(
-          f"Progression : {imported}/{total_missing} importés)"
-          )
+    logger.info(f"Progression : {imported}/{total_missing} importés)")
     raw_msg = execute_with_quota_retry(
-      lambda msg_id=mid:
-        service.users()
-        .messages()
-        .get(userId="me", id=mid, format="full")
+      lambda msg_id=mid: service.users().messages().get(userId="me", id=mid, format="full")
     )
     payload = raw_msg.get("payload") or {}
     headers = payload.get("headers") or []
@@ -290,11 +282,7 @@ def sync_gmail_messages() -> dict[str, Any]:
       target_name = to_name
     else:
       direction = "inbound"
-      if (
-          from_email == SYSTEM_FORM_EMAIL
-          and reply_email
-          and reply_email != SYSTEM_FORM_EMAIL
-      ):
+      if from_email == SYSTEM_FORM_EMAIL and reply_email and reply_email != SYSTEM_FORM_EMAIL:
         target_email = reply_email
         target_name = from_name or reply_name
       else:
@@ -305,11 +293,7 @@ def sync_gmail_messages() -> dict[str, Any]:
       continue
 
     try:
-      sent_at = (
-          parsedate_to_datetime(date_header)
-          if date_header
-          else datetime.now(timezone.utc)
-      )
+      sent_at = parsedate_to_datetime(date_header) if date_header else datetime.now(timezone.utc)
       if sent_at.tzinfo is None:
         sent_at = sent_at.replace(tzinfo=timezone.utc)
     except Exception:
@@ -321,14 +305,14 @@ def sync_gmail_messages() -> dict[str, Any]:
     with get_db_connection() as conn:
       with conn.cursor() as cur:
         contact_id, identity_id = _resolve_contact_and_identity(
-            cur=cur,
-            target_email=target_email,
-            display_name=target_name,
+          cur=cur,
+          target_email=target_email,
+          display_name=target_name,
         )
         thread_id = raw_msg.get("threadId")
         raw_payload_json = json.dumps(raw_msg, ensure_ascii=False)
         cur.execute(
-            """
+          """
             INSERT INTO messages (
                 contact_id,
                 identity_id,
@@ -347,23 +331,23 @@ def sync_gmail_messages() -> dict[str, Any]:
             ON CONFLICT (external_id) DO NOTHING
             RETURNING id
             """,
-            (
-                contact_id,
-                identity_id,
-                mid,
-                thread_id,
-                from_email or target_email,
-                to_email or None,
-                subject,
-                raw_payload_json,
-                cleaned_content,
-                direction,
-                sent_at,
-            ),
+          (
+            contact_id,
+            identity_id,
+            mid,
+            thread_id,
+            from_email or target_email,
+            to_email or None,
+            subject,
+            raw_payload_json,
+            cleaned_content,
+            direction,
+            sent_at,
+          ),
         )
         if cur.fetchone():
           cur.execute(
-              """
+            """
                         UPDATE contacts
                         SET last_interaction_at = GREATEST(
                             COALESCE(last_interaction_at, %s),
@@ -371,14 +355,14 @@ def sync_gmail_messages() -> dict[str, Any]:
                         )
                         WHERE id = %s
                         """,
-              (sent_at, sent_at, contact_id),
+            (sent_at, sent_at, contact_id),
           )
           imported += 1
           updated_contact_ids.add(contact_id)
       conn.commit()
 
   return {
-      "imported": imported,
-      "skipped": len(existing_ids),
-      "updated_contact_ids": updated_contact_ids,
+    "imported": imported,
+    "skipped": len(existing_ids),
+    "updated_contact_ids": updated_contact_ids,
   }

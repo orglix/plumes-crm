@@ -1,5 +1,5 @@
 import sys, logging
-from plumes_crm.sync import sync_gmail_messages #, clean_existing_messages
+from plumes_crm.sync import sync_gmail_messages  # , clean_existing_messages
 from plumes_crm.assistant import run_chat_turn
 
 
@@ -36,9 +36,9 @@ def run_cli_chat() -> None:
 
 def main():
   logging.basicConfig(
-      level=logging.INFO,
-      format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-      force=True,
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    force=True,
   )
   if len(sys.argv) > 1 and sys.argv[1] == "sync-gmail":
     print("Lancement de la synchronisation Gmail...")
