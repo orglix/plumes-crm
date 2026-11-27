@@ -388,6 +388,7 @@ def generate_thread_summaries(
             continue
 
           SummaryRunStats.threads_updated += 1
+          conn.commit()
           logger.info(
             "Résumé enregistré : contact_id=%s thread_key=%s categories=%s msgs=%d",
             contact_id,
